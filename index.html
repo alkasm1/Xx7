@@ -156,6 +156,8 @@ async function encodeImage() {
     label.textContent = `الجزء ${index+1} من ${chunks.length}`;
 
     const qrDiv = document.createElement("div");
+    qrDiv.dataset.payload = payload; // مهم للحفظ/المشاركة
+
     new QRCode(qrDiv, {
       text: payload,
       width: 260,
@@ -168,11 +170,11 @@ async function encodeImage() {
 
     const saveBtn = document.createElement("button");
     saveBtn.textContent = "حفظ";
-    saveBtn.onclick = () => saveQR(qrDiv);
+    saveBtn.onclick = () => saveQRFromPayload(payload);
 
     const shareBtn = document.createElement("button");
     shareBtn.textContent = "مشاركة";
-    shareBtn.onclick = () => shareQR(qrDiv);
+    shareBtn.onclick = () => shareQRFromPayload(payload);
 
     btns.appendChild(saveBtn);
     btns.appendChild(shareBtn);
@@ -187,37 +189,62 @@ async function encodeImage() {
   alert("تم توليد باركودات الصورة بنجاح.");
 }
 
-/* حفظ QR */
-function saveQR(qrDiv) {
-  const img = qrDiv.querySelector("img");
-  const canvas = qrDiv.querySelector("canvas");
-  let url = null;
+/* توليد QR في كانفس مستقل وإرجاع dataURL */
+function generateQRDataURL(payload) {
+  const size = 260;
+  const temp = document.createElement("div");
+  const qr = new QRCode(temp, {
+    text: payload,
+    width: size,
+    height: size,
+    correctLevel: QRCode.CorrectLevel.M
+  });
 
-  if (img) url = img.src;
-  else if (canvas) url = canvas.toDataURL("image/png");
+  // نأخذ الكانفس الذي أنشأته المكتبة
+  const canvas = temp.querySelector("canvas");
+  if (!canvas) return null;
 
+  // نرسمه على كانفس جديد بخلفية بيضاء
+  const outCanvas = document.createElement("canvas");
+  outCanvas.width = size;
+  outCanvas.height = size;
+  const ctx = outCanvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, size, size);
+  ctx.drawImage(canvas, 0, 0);
+
+  return outCanvas.toDataURL("image/png");
+}
+
+/* حفظ QR من الـ payload مباشرة */
+function saveQRFromPayload(payload) {
+  const url = generateQRDataURL(payload);
+  if (!url) {
+    alert("تعذر توليد صورة الباركود.");
+    return;
+  }
   const a = document.createElement("a");
   a.href = url;
   a.download = "qr.png";
   a.click();
 }
 
-/* مشاركة QR */
-async function shareQR(qrDiv) {
-  const img = qrDiv.querySelector("img");
-  const canvas = qrDiv.querySelector("canvas");
-  let url = null;
+/* مشاركة QR من الـ payload مباشرة */
+async function shareQRFromPayload(payload) {
+  const url = generateQRDataURL(payload);
+  if (!url) {
+    alert("تعذر توليد صورة الباركود.");
+    return;
+  }
 
-  if (img) url = img.src;
-  else if (canvas) url = canvas.toDataURL("image/png");
-
-  const blob = await (await fetch(url)).blob();
+  const res = await fetch(url);
+  const blob = await res.blob();
   const file = new File([blob], "qr.png", { type: "image/png" });
 
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     navigator.share({ files: [file], title: "QR" });
   } else {
-    alert("المشاركة غير مدعومة.");
+    alert("المشاركة غير مدعومة على هذا الجهاز.");
   }
 }
 
@@ -306,7 +333,9 @@ function startScan() {
     { facingMode: "environment" },
     { fps: 10, qrbox: 250 },
     qrText => handleQRPayload(qrText)
-  );
+  ).catch(err => {
+    alert("تعذر تشغيل الكاميرا: " + err);
+  });
 }
 
 /* فكّ باركود من صورة في المعرض */
@@ -332,7 +361,7 @@ async function decodeFromQRImage() {
     const result = await localQr.scanFile(file, true);
     handleQRPayload(result);
   } catch (e) {
-    alert("فشل في قراءة الباركود.");
+    alert("فشل في قراءة الباركود من الصورة.");
   } finally {
     localQr.clear();
   }
