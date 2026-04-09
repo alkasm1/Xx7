@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<title>Image Multi‑QR Sender</title>
+<title>نظام إرسال الصور عبر باركودات متعددة</title>
 
 <style>
 body {
@@ -61,10 +61,19 @@ textarea, input[type="file"] {
 .qr-item {
   margin-bottom: 25px;
 }
+
+.small {
+  font-size: 13px;
+  color: #666;
+  margin-top: 5px;
+  text-align: center;
+}
 </style>
 
+<!-- مكتبة توليد QR -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
+<!-- مكتبة قراءة QR من الصور -->
+<script src="https://unpkg.com/html5-qrcode"></script>
 
 </head>
 
@@ -74,36 +83,61 @@ textarea, input[type="file"] {
 
 <div class="container">
 
-<h3>اختر صورة لإرسالها</h3>
-<input type="file" id="imageInput" accept="image/*">
+  <h3>1) إرسال صورة</h3>
+  <input type="file" id="imageInput" accept="image/*">
+  <button onclick="encodeImage()">تحويل الصورة إلى باركودات</button>
+  <p class="small">سيتم توليد عدة باركودات حسب حجم الصورة. امسحها واحدًا تلو الآخر عند الاستقبال.</p>
 
-<button onclick="encodeImage()">تحويل الصورة إلى باركودات</button>
+  <div id="qrContainer" class="qr-box"></div>
 
-<div id="qrContainer" class="qr-box"></div>
+  <hr>
 
-<hr>
+  <h3>2) استقبال الصورة</h3>
+  <p class="small">يمكنك مسح باركود من الكاميرا أو اختيار صورة باركود من المعرض. كرر العملية لكل جزء.</p>
 
-<h3>استقبال الصورة</h3>
-<textarea id="receivedParts" rows="4" placeholder="الصق أجزاء QR هنا (كل جزء في سطر)"></textarea>
-<button onclick="decodeImage()">استعادة الصورة</button>
+  <button onclick="startScan()">مسح باركود بالكاميرا</button>
+  <input type="file" id="qrImageInput" accept="image/*" style="margin-top:10px;">
+  <button onclick="decodeFromQRImage()">فكّ باركود من صورة في المعرض</button>
 
-<div id="outputImage" style="margin-top:20px; text-align:center;"></div>
+  <div id="reader" style="width:300px; margin:15px auto; display:none;"></div>
+
+  <h4>الأجزاء المستلمة:</h4>
+  <div id="partsStatus" class="small"></div>
+
+  <h4>الصورة المستعادة:</h4>
+  <div id="outputImage" style="margin-top:20px; text-align:center;"></div>
 
 </div>
 
 <script>
+/* =========================
+   متغيرات عامة لتجميع الأجزاء
+========================= */
+let receivedParts = {};
+let totalParts = 0;
+let receivedMime = null;
 
-/* تحويل ملف إلى Base64 */
-function fileToBase64(file) {
+/* =========================
+   تحويل ملف إلى Base64 مع حفظ نوعه
+========================= */
+function fileToBase64WithMime(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onload = () => {
+      const result = reader.result; // data:<mime>;base64,XXXX
+      const [meta, data] = result.split(",");
+      const mimeMatch = meta.match(/data:(.*);base64/);
+      const mime = mimeMatch ? mimeMatch[1] : "image/png";
+      resolve({ mime, data });
+    };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
 }
 
-/* توليد باركودات متعددة للصورة */
+/* =========================
+   توليد باركودات متعددة للصورة
+========================= */
 async function encodeImage() {
   const file = document.getElementById("imageInput").files[0];
   if (!file) {
@@ -111,23 +145,21 @@ async function encodeImage() {
     return;
   }
 
-  const base64 = await fileToBase64(file);
+  const { mime, data: base64 } = await fileToBase64WithMime(file);
 
-  // ضغط Base64
-  const compressed = LZString.compressToEncodedURIComponent(base64);
-
-  // تقسيم البيانات
-  const chunkSize = 500; // مناسب للـ QR
+  // تقسيم Base64 إلى أجزاء
+  const chunkSize = 800; // حجم مناسب لنص الباركود
   const chunks = [];
-  for (let i = 0; i < compressed.length; i += chunkSize) {
-    chunks.push(compressed.slice(i, i + chunkSize));
+  for (let i = 0; i < base64.length; i += chunkSize) {
+    chunks.push(base64.slice(i, i + chunkSize));
   }
 
   const qrContainer = document.getElementById("qrContainer");
   qrContainer.innerHTML = "";
 
   chunks.forEach((chunk, index) => {
-    const payload = `IMG:${index+1}/${chunks.length}|${chunk}`;
+    // IMG:current/total:mime|data
+    const payload = `IMG:${index+1}/${chunks.length}:${mime}|${chunk}`;
 
     const div = document.createElement("div");
     div.className = "qr-item";
@@ -153,68 +185,144 @@ async function encodeImage() {
   alert("تم توليد باركودات الصورة بنجاح.");
 }
 
-/* فكّ الباركودات واستعادة الصورة */
-function decodeImage() {
-  const input = document.getElementById("receivedParts").value.trim();
-  if (!input) {
-    alert("الصق أجزاء QR أولاً.");
+/* =========================
+   معالجة نص باركود واحد مستلم
+========================= */
+function handleQRPayload(payload) {
+  if (!payload.startsWith("IMG:")) {
+    alert("هذا الباركود لا ينتمي للصورة الحالية.");
     return;
   }
 
-  const lines = input.split("\n");
-  const parts = {};
-  let total = 0;
+  // IMG:current/total:mime|data
+  const [header, body] = payload.split("|");
+  const headerParts = header.replace("IMG:", "").split(":");
+  const partInfo = headerParts[0]; // current/total
+  const mime = headerParts[1] || "image/png";
 
-  lines.forEach(line => {
-    if (!line.includes("IMG:")) return;
+  const [currentStr, totalStr] = partInfo.split("/");
+  const current = parseInt(currentStr);
+  const total = parseInt(totalStr);
 
-    const [header, body] = line.split("|");
-    const [current, t] = header.replace("IMG:", "").split("/");
-    total = parseInt(t);
-    parts[parseInt(current)] = body;
-  });
+  if (!totalParts) totalParts = total;
+  if (!receivedMime) receivedMime = mime;
 
-  if (Object.keys(parts).length !== total) {
-    alert("لم يتم إدخال جميع الأجزاء.");
+  receivedParts[current] = body;
+
+  updatePartsStatus();
+
+  if (Object.keys(receivedParts).length === totalParts) {
+    rebuildImage();
+  }
+}
+
+/* =========================
+   تحديث حالة الأجزاء المستلمة
+========================= */
+function updatePartsStatus() {
+  if (!totalParts) {
+    document.getElementById("partsStatus").textContent = "لم يتم استقبال أي جزء بعد.";
     return;
   }
 
-  let fullCompressed = "";
-  for (let i = 1; i <= total; i++) {
-    fullCompressed += parts[i];
-  }
+  const receivedCount = Object.keys(receivedParts).length;
+  document.getElementById("partsStatus").textContent =
+    `تم استقبال ${receivedCount} من ${totalParts} جزءًا.`;
+}
 
-  const base64 = LZString.decompressFromEncodedURIComponent(fullCompressed);
+/* =========================
+   إعادة بناء الصورة من الأجزاء
+========================= */
+function rebuildImage() {
+  let fullBase64 = "";
+  for (let i = 1; i <= totalParts; i++) {
+    if (!receivedParts[i]) {
+      alert("هناك جزء مفقود، لا يمكن إعادة بناء الصورة.");
+      return;
+    }
+    fullBase64 += receivedParts[i];
+  }
 
   const img = new Image();
-  img.src = "data:image/png;base64," + base64;
-
-  const out = document.getElementById("outputImage");
-  out.innerHTML "").split("/");
-    total = parseInt(t);
-    parts[parseInt(current)] = body;
-  });
-
-  if (Object.keys(parts).length !== total) {
-    alert("لم يتم إدخال جميع الأجزاء.");
-    return;
-  }
-
-  let fullCompressed = "";
-  for (let i = 1; i <= total; i++) {
-    fullCompressed += parts[i];
-  }
-
-  const base64 = LZString.decompressFromEncodedURIComponent(fullCompressed);
-
-  const img = new Image();
-  img.src = "data:image/png;base64," + base64;
+  img.src = `data:${receivedMime};base64,` + fullBase64;
 
   const out = document.getElementById("outputImage");
   out.innerHTML = "";
   out.appendChild(img);
+
+  document.getElementById("partsStatus").textContent = "تم استعادة الصورة بنجاح.";
+
+  // إعادة تهيئة المتغيرات لجلسة جديدة
+  receivedParts = {};
+  totalParts = 0;
+  receivedMime = null;
 }
 
+/* =========================
+   مسح باركود بالكاميرا
+========================= */
+let html5Qr = null;
+
+function startScan() {
+  const reader = document.getElementById("reader");
+  reader.style.display = "block";
+
+  if (html5Qr) {
+    html5Qr.stop().catch(()=>{}).finally(()=> {
+      html5Qr.clear();
+      html5Qr = null;
+      startScan();
+    });
+    return;
+  }
+
+  html5Qr = new Html5Qrcode("reader");
+
+  html5Qr.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: 250 },
+    qrText => {
+      handleQRPayload(qrText);
+      // لا نوقف المسح مباشرة، يمكن استقبال عدة أجزاء متتالية
+    },
+    errorMessage => {
+      // يمكن تجاهل الأخطاء المؤقتة
+    }
+  ).catch(err => {
+    alert("تعذر تشغيل الكاميرا: " + err);
+  });
+}
+
+/* =========================
+   فكّ باركود من صورة في المعرض
+========================= */
+async function decodeFromQRImage() {
+  const file = document.getElementById("qrImageInput").files[0];
+  if (!file) {
+    alert("اختر صورة تحتوي على باركود أولاً.");
+    return;
+  }
+
+  const tempId = "reader-temp";
+  let tempDiv = document.getElementById(tempId);
+  if (!tempDiv) {
+    tempDiv = document.createElement("div");
+    tempDiv.id = tempId;
+    tempDiv.style.display = "none";
+    document.body.appendChild(tempDiv);
+  }
+
+  const localQr = new Html5Qrcode(tempId);
+
+  try {
+    const result = await localQr.scanFile(file, true);
+    handleQRPayload(result);
+  } catch (e) {
+    alert("فشل في قراءة الباركود من الصورة.");
+  } finally {
+    localQr.clear();
+  }
+}
 </script>
 
 </body>
