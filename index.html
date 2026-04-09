@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Image Multi‑QR Sender</title>
+
+<style>
+body {
+  font-family: "Cairo", sans-serif;
+  background: #ffffff;
+  margin: 0;
+  padding: 0;
+  color: #222;
+}
+
+header {
+  background: #0BA37F;
+  color: white;
+  padding: 15px;
+  text-align: center;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.container {
+  padding: 20px;
+  max-width: 600px;
+  margin: auto;
+}
+
+button {
+  width: 100%;
+  padding: 14px;
+  margin-top: 10px;
+  background: #0BA37F;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 17px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #0a8c6c;
+}
+
+textarea, input[type="file"] {
+  width: 100%;
+  padding: 12px;
+  margin-top: 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.qr-box {
+  margin: 20px auto;
+  text-align: center;
+}
+
+.qr-item {
+  margin-bottom: 25px;
+}
+</style>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
+
+</head>
+
+<body>
+
+<header>نظام إرسال الصور عبر باركودات متعددة</header>
+
+<div class="container">
+
+<h3>اختر صورة لإرسالها</h3>
+<input type="file" id="imageInput" accept="image/*">
+
+<button onclick="encodeImage()">تحويل الصورة إلى باركودات</button>
+
+<div id="qrContainer" class="qr-box"></div>
+
+<hr>
+
+<h3>استقبال الصورة</h3>
+<textarea id="receivedParts" rows="4" placeholder="الصق أجزاء QR هنا (كل جزء في سطر)"></textarea>
+<button onclick="decodeImage()">استعادة الصورة</button>
+
+<div id="outputImage" style="margin-top:20px; text-align:center;"></div>
+
+</div>
+
+<script>
+
+/* تحويل ملف إلى Base64 */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/* توليد باركودات متعددة للصورة */
+async function encodeImage() {
+  const file = document.getElementById("imageInput").files[0];
+  if (!file) {
+    alert("اختر صورة أولاً.");
+    return;
+  }
+
+  const base64 = await fileToBase64(file);
+
+  // ضغط Base64
+  const compressed = LZString.compressToEncodedURIComponent(base64);
+
+  // تقسيم البيانات
+  const chunkSize = 500; // مناسب للـ QR
+  const chunks = [];
+  for (let i = 0; i < compressed.length; i += chunkSize) {
+    chunks.push(compressed.slice(i, i + chunkSize));
+  }
+
+  const qrContainer = document.getElementById("qrContainer");
+  qrContainer.innerHTML = "";
+
+  chunks.forEach((chunk, index) => {
+    const payload = `IMG:${index+1}/${chunks.length}|${chunk}`;
+
+    const div = document.createElement("div");
+    div.className = "qr-item";
+
+    const label = document.createElement("div");
+    label.textContent = `الجزء ${index+1} من ${chunks.length}`;
+    label.style.marginBottom = "8px";
+
+    const qrDiv = document.createElement("div");
+
+    new QRCode(qrDiv, {
+      text: payload,
+      width: 260,
+      height: 260,
+      correctLevel: QRCode.CorrectLevel.M
+    });
+
+    div.appendChild(label);
+    div.appendChild(qrDiv);
+    qrContainer.appendChild(div);
+  });
+
+  alert("تم توليد باركودات الصورة بنجاح.");
+}
+
+/* فكّ الباركودات واستعادة الصورة */
+function decodeImage() {
+  const input = document.getElementById("receivedParts").value.trim();
+  if (!input) {
+    alert("الصق أجزاء QR أولاً.");
+    return;
+  }
+
+  const lines = input.split("\n");
+  const parts = {};
+  let total = 0;
+
+  lines.forEach(line => {
+    if (!line.includes("IMG:")) return;
+
+    const [header, body] = line.split("|");
+    const [current, t] = header.replace("IMG:", "").split("/");
+    total = parseInt(t);
+    parts[parseInt(current)] = body;
+  });
+
+  if (Object.keys(parts).length !== total) {
+    alert("لم يتم إدخال جميع الأجزاء.");
+    return;
+  }
+
+  let fullCompressed = "";
+  for (let i = 1; i <= total; i++) {
+    fullCompressed += parts[i];
+  }
+
+  const base64 = LZString.decompressFromEncodedURIComponent(fullCompressed);
+
+  const img = new Image();
+  img.src = "data:image/png;base64," + base64;
+
+  const out = document.getElementById("outputImage");
+  out.innerHTML "").split("/");
+    total = parseInt(t);
+    parts[parseInt(current)] = body;
+  });
+
+  if (Object.keys(parts).length !== total) {
+    alert("لم يتم إدخال جميع الأجزاء.");
+    return;
+  }
+
+  let fullCompressed = "";
+  for (let i = 1; i <= total; i++) {
+    fullCompressed += parts[i];
+  }
+
+  const base64 = LZString.decompressFromEncodedURIComponent(fullCompressed);
+
+  const img = new Image();
+  img.src = "data:image/png;base64," + base64;
+
+  const out = document.getElementById("outputImage");
+  out.innerHTML = "";
+  out.appendChild(img);
+}
+
+</script>
+
+</body>
+</html>
