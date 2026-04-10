@@ -71,8 +71,11 @@ textarea, input[type="file"] {
 }
 </style>
 
+<!-- مكتبة توليد QR -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="https://unpkg.com/html5-qrcode"></script>
+
+<!-- مكتبة قراءة QR من الصور -->
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 
 </head>
 
@@ -94,8 +97,8 @@ textarea, input[type="file"] {
 
   <button onclick="startScan()">مسح باركود بالكاميرا</button>
 
-  <input type="file" id="qrImageInput" accept="image/*">
-  <button onclick="decodeFromQRImage()">فكّ باركود من صورة في المعرض</button>
+  <input type="file" id="qrImageInput" accept="image/*" multiple>
+  <button onclick="decodeMultipleQR()">فكّ عدة باركودات من المعرض</button>
 
   <div id="reader" style="width:300px; margin:15px auto; display:none;"></div>
 
@@ -104,9 +107,6 @@ textarea, input[type="file"] {
 
   <h4>الصورة المستعادة:</h4>
   <div id="outputImage" style="margin-top:20px; text-align:center;"></div>
-
-</div>
-
 <script>
 let receivedParts = {};
 let totalParts = 0;
@@ -156,7 +156,7 @@ async function encodeImage() {
     label.textContent = `الجزء ${index+1} من ${chunks.length}`;
 
     const qrDiv = document.createElement("div");
-    qrDiv.dataset.payload = payload; // مهم للحفظ/المشاركة
+    qrDiv.dataset.payload = payload;
 
     new QRCode(qrDiv, {
       text: payload,
@@ -170,11 +170,11 @@ async function encodeImage() {
 
     const saveBtn = document.createElement("button");
     saveBtn.textContent = "حفظ";
-    saveBtn.onclick = () => saveQRFromPayload(payload);
+    saveBtn.onclick = () => saveQR(payload);
 
     const shareBtn = document.createElement("button");
     shareBtn.textContent = "مشاركة";
-    shareBtn.onclick = () => shareQRFromPayload(payload);
+    shareBtn.onclick = () => shareQR(payload);
 
     btns.appendChild(saveBtn);
     btns.appendChild(shareBtn);
@@ -189,25 +189,22 @@ async function encodeImage() {
   alert("تم توليد باركودات الصورة بنجاح.");
 }
 
-/* توليد QR في كانفس مستقل وإرجاع dataURL */
-function generateQRDataURL(payload) {
+/* توليد QR في كانفس مستقل */
+function generateQR(payload) {
   const size = 260;
   const temp = document.createElement("div");
-  const qr = new QRCode(temp, {
+  new QRCode(temp, {
     text: payload,
     width: size,
     height: size,
     correctLevel: QRCode.CorrectLevel.M
   });
 
-  // نأخذ الكانفس الذي أنشأته المكتبة
   const canvas = temp.querySelector("canvas");
-  if (!canvas) return null;
-
-  // نرسمه على كانفس جديد بخلفية بيضاء
   const outCanvas = document.createElement("canvas");
   outCanvas.width = size;
   outCanvas.height = size;
+
   const ctx = outCanvas.getContext("2d");
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, size, size);
@@ -216,39 +213,27 @@ function generateQRDataURL(payload) {
   return outCanvas.toDataURL("image/png");
 }
 
-/* حفظ QR من الـ payload مباشرة */
-function saveQRFromPayload(payload) {
-  const url = generateQRDataURL(payload);
-  if (!url) {
-    alert("تعذر توليد صورة الباركود.");
-    return;
-  }
+/* حفظ QR */
+function saveQR(payload) {
+  const url = generateQR(payload);
   const a = document.createElement("a");
   a.href = url;
   a.download = "qr.png";
   a.click();
 }
 
-/* مشاركة QR من الـ payload مباشرة */
-async function shareQRFromPayload(payload) {
-  const url = generateQRDataURL(payload);
-  if (!url) {
-    alert("تعذر توليد صورة الباركود.");
-    return;
-  }
-
-  const res = await fetch(url);
-  const blob = await res.blob();
+/* مشاركة QR */
+async function shareQR(payload) {
+  const url = generateQR(payload);
+  const blob = await (await fetch(url)).blob();
   const file = new File([blob], "qr.png", { type: "image/png" });
 
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     navigator.share({ files: [file], title: "QR" });
   } else {
-    alert("المشاركة غير مدعومة على هذا الجهاز.");
+    alert("المشاركة غير مدعومة.");
   }
-}
-
-/* معالجة باركود مستلم */
+}/* معالجة باركود مستلم */
 function handleQRPayload(payload) {
   if (!payload.startsWith("IMG:")) {
     alert("هذا الباركود لا ينتمي للصورة.");
@@ -311,7 +296,7 @@ function rebuildImage() {
   receivedMime = null;
 }
 
-/* مسح باركود بالكاميرا */
+/* قراءة QR من الكاميرا */
 let html5Qr = null;
 
 function startScan() {
@@ -333,40 +318,49 @@ function startScan() {
     { facingMode: "environment" },
     { fps: 10, qrbox: 250 },
     qrText => handleQRPayload(qrText)
-  ).catch(err => {
-    alert("تعذر تشغيل الكاميرا: " + err);
-  });
+  );
 }
 
-/* فكّ باركود من صورة في المعرض */
-async function decodeFromQRImage() {
-  const file = document.getElementById("qrImageInput").files[0];
-  if (!file) {
-    alert("اختر صورة باركود أولاً.");
+/* قراءة عدة باركودات من المعرض */
+async function decodeMultipleQR() {
+  const files = document.getElementById("qrImageInput").files;
+  if (!files.length) {
+    alert("اختر صور باركود أولاً.");
     return;
   }
 
-  const tempId = "reader-temp";
-  let tempDiv = document.getElementById(tempId);
-  if (!tempDiv) {
-    tempDiv = document.createElement("div");
-    tempDiv.id = tempId;
-    tempDiv.style.display = "none";
-    document.body.appendChild(tempDiv);
+  for (const file of files) {
+    const img = await loadImage(file);
+    const payload = scanQRFromImage(img);
+    if (payload) handleQRPayload(payload);
   }
+}
 
-  const localQr = new Html5Qrcode(tempId);
+/* تحميل صورة */
+function loadImage(file) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.src = URL.createObjectURL(file);
+  });
+}
 
-  try {
-    const result = await localQr.scanFile(file, true);
-    handleQRPayload(result);
-  } catch (e) {
-    alert("فشل في قراءة الباركود من الصورة.");
-  } finally {
-    localQr.clear();
-  }
+/* قراءة QR من صورة باستخدام jsQR */
+function scanQRFromImage(img) {
+  const canvas = document.createElement("canvas");
+  canvas.width = img.width;
+  canvas.height = img.height;
+
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const code = jsQR(imageData.data, canvas.width, canvas.height);
+
+  return code ? code.data : null;
 }
 </script>
 
 </body>
 </html>
+</div>
