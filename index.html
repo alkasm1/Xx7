@@ -44,7 +44,7 @@ button:hover {
   background: #0a8c6c;
 }
 
-textarea, input[type="file"] {
+input[type="file"] {
   width: 100%;
   padding: 12px;
   margin-top: 10px;
@@ -69,12 +69,17 @@ textarea, input[type="file"] {
   padding: 10px;
   font-size: 15px;
 }
+
+#cameraView {
+  width: 300px;
+  height: 300px;
+  background: #000;
+  margin: 15px auto;
+  display: none;
+}
 </style>
 
-<!-- مكتبة توليد QR -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-
-<!-- مكتبة قراءة QR من الصور -->
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 
 </head>
@@ -95,18 +100,20 @@ textarea, input[type="file"] {
 
   <h3>2) استقبال الصورة</h3>
 
-  <button onclick="startScan()">مسح باركود بالكاميرا</button>
+  <button onclick="toggleCamera()">مسح باركود بالكاميرا</button>
+  <video id="cameraView" autoplay playsinline></video>
 
   <input type="file" id="qrImageInput" accept="image/*" multiple>
   <button onclick="decodeMultipleQR()">فكّ عدة باركودات من المعرض</button>
-
-  <div id="reader" style="width:300px; margin:15px auto; display:none;"></div>
 
   <h4>الأجزاء المستلمة:</h4>
   <div id="partsStatus"></div>
 
   <h4>الصورة المستعادة:</h4>
   <div id="outputImage" style="margin-top:20px; text-align:center;"></div>
+
+</div>
+
 <script>
 let receivedParts = {};
 let totalParts = 0;
@@ -137,7 +144,8 @@ async function encodeImage() {
 
   const { mime, data: base64 } = await fileToBase64WithMime(file);
 
-  const chunkSize = 800;
+  // لتقليل مشاكل القراءة، نخلي الجزء أصغر
+  const chunkSize = 400;
   const chunks = [];
   for (let i = 0; i < base64.length; i += chunkSize) {
     chunks.push(base64.slice(i, i + chunkSize));
@@ -156,7 +164,6 @@ async function encodeImage() {
     label.textContent = `الجزء ${index+1} من ${chunks.length}`;
 
     const qrDiv = document.createElement("div");
-    qrDiv.dataset.payload = payload;
 
     new QRCode(qrDiv, {
       text: payload,
@@ -225,7 +232,8 @@ function saveQR(payload) {
 /* مشاركة QR */
 async function shareQR(payload) {
   const url = generateQR(payload);
-  const blob = await (await fetch(url)).blob();
+  const res = await fetch(url);
+  const blob = await res.blob();
   const file = new File([blob], "qr.png", { type: "image/png" });
 
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -233,9 +241,11 @@ async function shareQR(payload) {
   } else {
     alert("المشاركة غير مدعومة.");
   }
-}/* معالجة باركود مستلم */
+}
+
+/* معالجة باركود مستلم */
 function handleQRPayload(payload) {
-  if (!payload.startsWith("IMG:")) {
+  if (!payload || !payload.startsWith("IMG:")) {
     alert("هذا الباركود لا ينتمي للصورة.");
     return;
   }
@@ -296,31 +306,6 @@ function rebuildImage() {
   receivedMime = null;
 }
 
-/* قراءة QR من الكاميرا */
-let html5Qr = null;
-
-function startScan() {
-  const reader = document.getElementById("reader");
-  reader.style.display = "block";
-
-  if (html5Qr) {
-    html5Qr.stop().catch(()=>{}).finally(()=> {
-      html5Qr.clear();
-      html5Qr = null;
-      startScan();
-    });
-    return;
-  }
-
-  html5Qr = new Html5Qrcode("reader");
-
-  html5Qr.start(
-    { facingMode: "environment" },
-    { fps: 10, qrbox: 250 },
-    qrText => handleQRPayload(qrText)
-  );
-}
-
 /* قراءة عدة باركودات من المعرض */
 async function decodeMultipleQR() {
   const files = document.getElementById("qrImageInput").files;
@@ -332,7 +317,11 @@ async function decodeMultipleQR() {
   for (const file of files) {
     const img = await loadImage(file);
     const payload = scanQRFromImage(img);
-    if (payload) handleQRPayload(payload);
+    if (payload) {
+      handleQRPayload(payload);
+    } else {
+      alert("فشل قراءة أحد الباركودات، تأكد من وضوحه.");
+    }
   }
 }
 
@@ -359,8 +348,58 @@ function scanQRFromImage(img) {
 
   return code ? code.data : null;
 }
+
+/* الكاميرا + jsQR */
+let cameraStream = null;
+let cameraRunning = false;
+
+async function toggleCamera() {
+  const video = document.getElementById("cameraView");
+
+  if (cameraRunning) {
+    cameraRunning = false;
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(t => t.stop());
+      cameraStream = null;
+    }
+    video.style.display = "none";
+    return;
+  }
+
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    video.srcObject = cameraStream;
+    video.style.display = "block";
+    cameraRunning = true;
+    scanCameraLoop();
+  } catch (e) {
+    alert("تعذر تشغيل الكاميرا: " + e);
+  }
+}
+
+function scanCameraLoop() {
+  if (!cameraRunning) return;
+
+  const video = document.getElementById("cameraView");
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imageData.data, canvas.width, canvas.height);
+
+    if (code && code.data) {
+      handleQRPayload(code.data);
+    }
+  }
+
+  requestAnimationFrame(scanCameraLoop);
+}
 </script>
 
 </body>
 </html>
-</div>
