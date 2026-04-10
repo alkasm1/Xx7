@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>نظام إرسال الصور عبر باركودات متعددة</title>
+
+<style>
+body {
+  font-family: "Cairo", sans-serif;
+  background: #ffffff;
+  margin: 0;
+  padding: 0;
+  color: #222;
+}
+
+header {
+  background: #0BA37F;
+  color: white;
+  padding: 15px;
+  text-align: center;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.container {
+  padding: 20px;
+  max-width: 600px;
+  margin: auto;
+}
+
+button {
+  width: 100%;
+  padding: 14px;
+  margin-top: 10px;
+  background: #0BA37F;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 17px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #0a8c6c;
+}
+
+input[type="file"] {
+  width: 100%;
+  padding: 12px;
+  margin-top: 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.qr-item {
+  margin-bottom: 25px;
+  text-align: center;
+}
+
+.qr-buttons {
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+}
+
+.qr-buttons button {
+  flex: 1;
+  padding: 10px;
+  font-size: 15px;
+}
+
+#cameraView {
+  width: 300px;
+  height: 300px;
+  background: #000;
+  margin: 15px auto;
+  display: none;
+}
+</style>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
+</head>
+
+<body>
+
+<header>نظام إرسال الصور عبر باركودات متعددة</header>
+
+<div class="container">
+
+  <h3>1) إرسال صورة</h3>
+  <input type="file" id="imageInput" accept="image/*">
+  <button onclick="encodeImage()">تحويل الصورة إلى باركودات</button>
+
+  <div id="qrContainer"></div>
+
+  <hr>
+
+  <h3>2) استقبال الصورة</h3>
+
+  <button onclick="toggleCamera()">مسح باركود بالكاميرا</button>
+  <video id="cameraView" autoplay playsinline></video>
+
+  <input type="file" id="qrImageInput" accept="image/*" multiple>
+  <button onclick="decodeMultipleQR()">فكّ عدة باركودات من المعرض</button>
+
+  <h4>الأجزاء المستلمة:</h4>
+  <div id="partsStatus"></div>
+
+  <h4>الصورة المستعادة:</h4>
+  <div id="outputImage" style="margin-top:20px; text-align:center;"></div>
+
+</div>
+
+<script>
+let receivedParts = {};
+let totalParts = 0;
+let receivedMime = null;
+
+/* تحويل ملف إلى Base64 مع حفظ نوعه */
+function fileToBase64WithMime(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      const [meta, data] = result.split(",");
+      const mime = meta.match(/data:(.*);base64/)[1];
+      resolve({ mime, data });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/* توليد باركودات متعددة للصورة */
+async function encodeImage() {
+  const file = document.getElementById("imageInput").files[0];
+  if (!file) {
+    alert("اختر صورة أولاً.");
+    return;
+  }
+
+  const { mime, data: base64 } = await fileToBase64WithMime(file);
+
+  // تقليل حجم الجزء لتحسين قراءة الباركود
+  const chunkSize = 400;
+  const chunks = [];
+  for (let i = 0; i < base64.length; i += chunkSize) {
+    chunks.push(base64.slice(i, i + chunkSize));
+  }
+
+  const qrContainer = document.getElementById("qrContainer");
+  qrContainer.innerHTML = "";
+
+  chunks.forEach((chunk, index) => {
+    const payload = `IMG:${index+1}/${chunks.length}:${mime}|${chunk}`;
+
+    const div = document.createElement("div");
+    div.className = "qr-item";
+
+    const label = document.createElement("div");
+    label.textContent = `الجزء ${index+1} من ${chunks.length}`;
+
+    const qrDiv = document.createElement("div");
+
+    new QRCode(qrDiv, {
+      text: payload,
+      width: 260,
+      height: 260,
+      correctLevel: QRCode.CorrectLevel.M
+    });
+
+    const btns = document.createElement("div");
+    btns.className = "qr-buttons";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "حفظ";
+    saveBtn.onclick = () => saveQR(payload);
+
+    const shareBtn = document.createElement("button");
+    shareBtn.textContent = "مشاركة";
+    shareBtn.onclick = () => shareQR(payload);
+
+    btns.appendChild(saveBtn);
+    btns.appendChild(shareBtn);
+
+    div.appendChild(label);
+    div.appendChild(qrDiv);
+    div.appendChild(btns);
+
+    qrContainer.appendChild(div);
+  });
+
+  alert("تم توليد باركودات الصورة بنجاح.");
+}
+
+/* توليد QR في كانفس مستقل */
+function generateQR(payload) {
+  const size = 260;
+  const temp = document.createElement("div");
+  new QRCode(temp, {
+    text: payload,
+    width: size,
+    height: size,
+    correctLevel: QRCode.CorrectLevel.M
+  });
+
+  const canvas = temp.querySelector("canvas");
+  const outCanvas = document.createElement("canvas");
+  outCanvas.width = size;
+  outCanvas.height = size;
+
+  const ctx = outCanvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, size, size);
+  ctx.drawImage(canvas, 0, 0);
+
+  return outCanvas.toDataURL("image/png");
+}
+
+/* حفظ QR */
+function saveQR(payload) {
+  const url = generateQR(payload);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "qr.png";
+  a.click();
+}
+
+/* مشاركة QR */
+async function shareQR(payload) {
+  const url = generateQR(payload);
+  const res = await fetch(url);
+  const blob = await res.blob();
+  const file = new File([blob], "qr.png", { type: "image/png" });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    navigator.share({ files: [file], title: "QR" });
+  } else {
+    alert("المشاركة غير مدعومة.");
+  }
+}
+
+/* معالجة باركود مستلم */
+function handleQRPayload(payload) {
+  if (!payload || !payload.startsWith("IMG:")) {
+    alert("هذا الباركود لا ينتمي للصورة.");
+    return;
+  }
+
+  const [header, body] = payload.split("|");
+  const [partInfo, mime] = header.replace("IMG:", "").split(":");
+  const [currentStr, totalStr] = partInfo.split("/");
+
+  const current = parseInt(currentStr);
+  const total = parseInt(totalStr);
+
+  if (!totalParts) totalParts = total;
+  if (!receivedMime) receivedMime = mime;
+
+  receivedParts[current] = body;
+
+  updatePartsStatus();
+  rebuildImage(); // نحاول دائمًا إعادة البناء حتى لو الأجزاء ناقصة
+}
+
+/* تحديث حالة الأجزاء */
+function updatePartsStatus() {
+  if (!totalParts) {
+    document.getElementById("partsStatus").textContent = "لم يتم استقبال أي جزء.";
+    return;
+  }
+
+  const count = Object.keys(receivedParts).length;
+  document.getElementById("partsStatus").textContent =
+    `تم استقبال ${count} من ${totalParts} جزءًا.`;
+}
+
+/* إعادة بناء الصورة بشكل تدريجي حتى مع الأجزاء الناقصة */
+function rebuildImage() {
+  const keys = Object.keys(receivedParts).map(n => parseInt(n));
+  if (!keys.length) {
+    document.getElementById("outputImage").innerHTML = "لا توجد بيانات كافية لعرض الصورة.";
+    return;
+  }
+
+  const maxIndex = Math.max(...keys);
+  let fullBase64 = "";
+
+  for (let i = 1; i <= maxIndex; i++) {
+    if (receivedParts[i]) {
+      fullBase64 += receivedParts[i];
+    } else {
+      console.warn("جزء ناقص:", i);
+      // لا نضيف شيء، فقط نتخطى الجزء
+    }
+  }
+
+  if (fullBase64.length < 50) {
+    document.getElementById("outputImage").innerHTML = "لا توجد بيانات كافية لعرض الصورة.";
+    return;
+  }
+
+  const img = new Image();
+  img.src = `data:${receivedMime};base64,` + fullBase64;
+
+  const out = document.getElementById("outputImage");
+  out.innerHTML = "";
+  out.appendChild(img);
+
+  document.getElementById("partsStatus").textContent =
+    `تم عرض الصورة من ${Object.keys(receivedParts).length} جزءًا من أصل ${totalParts}.`;
+}
+
+/* قراءة عدة باركودات من المعرض */
+async function decodeMultipleQR() {
+  const files = document.getElementById("qrImageInput").files;
+  if (!files.length) {
+    alert("اختر صور باركود أولاً.");
+    return;
+  }
+
+  for (const file of files) {
+    const img = await loadImage(file);
+    const payload = scanQRFromImage(img);
+    if (payload) {
+      handleQRPayload(payload);
+    } else {
+      alert("فشل قراءة أحد الباركودات، تأكد من وضوحه.");
+    }
+  }
+}
+
+/* تحميل صورة */
+function loadImage(file) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/* قراءة QR من صورة باستخدام jsQR */
+function scanQRFromImage(img) {
+  const canvas = document.createElement("canvas");
+  canvas.width = img.width;
+  canvas.height = img.height;
+
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const code = jsQR(imageData.data, canvas.width, canvas.height);
+
+  return code ? code.data : null;
+}
+
+/* الكاميرا + jsQR */
+let cameraStream = null;
+let cameraRunning = false;
+
+async function toggleCamera() {
+  const video = document.getElementById("cameraView");
+
+  if (cameraRunning) {
+    cameraRunning = false;
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(t => t.stop());
+      cameraStream = null;
+    }
+    video.style.display = "none";
+    return;
+  }
+
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    video.srcObject = cameraStream;
+    video.style.display = "block";
+    cameraRunning = true;
+    scanCameraLoop();
+  } catch (e) {
+    alert("تعذر تشغيل الكاميرا: " + e);
+  }
+}
+
+function scanCameraLoop() {
+  if (!cameraRunning) return;
+
+  const video = document.getElementById("cameraView");
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imageData.data, canvas.width, canvas.height);
+
+    if (code && code.data) {
+      handleQRPayload(code.data);
+    }
+  }
+
+  requestAnimationFrame(scanCameraLoop);
+}
+</script>
+
+</body>
+</html>
