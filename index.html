@@ -2,116 +2,155 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<title>نظام إرسال الصور المضغوطة عبر باركودات متعددة</title>
+<title>إرسال الصور عبر QR (نسخة مضغوطة)</title>
 
 <style>
 body {
-  font-family: "Cairo", sans-serif;
-  background: #ffffff;
-  margin: 0;
-  padding: 0;
-  color: #222;
-}
-header {
-  background: #0BA37F;
-  color: white;
-  padding: 15px;
+  font-family: sans-serif;
   text-align: center;
-  font-size: 22px;
-  font-weight: bold;
-}
-.container {
-  padding: 20px;
-  max-width: 600px;
-  margin: auto;
+  background: #f5f5f5;
 }
 button {
-  width: 100%;
-  padding: 14px;
-  margin-top: 10px;
-  background: #0BA37F;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 17px;
-  cursor: pointer;
-}
-button:hover {
-  background: #0a8c6c;
-}
-input[type="file"] {
-  width: 100%;
-  padding: 12px;
-  margin-top: 10px;
-  border: 1px solid #ccc;
-  border-radius: 8px;
-  font-size: 16px;
-}
-.qr-item {
-  margin-bottom: 25px;
-  text-align: center;
-}
-.qr-buttons {
-  margin-top: 8px;
-  display: flex;
-  gap: 10px;
-}
-.qr-buttons button {
-  flex: 1;
   padding: 10px;
-  font-size: 15px;
+  margin: 10px;
 }
-#cameraView {
-  width: 300px;
-  height: 300px;
-  background: #000;
-  margin: 15px auto;
-  display: none;
+.qr {
+  margin: 10px;
 }
 </style>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+
 </head>
 
 <body>
 
-<header>نظام إرسال الصور المضغوطة عبر باركودات متعددة</header>
+<h2>إرسال صورة عبر QR (مضغوط)</h2>
 
-<div class="container">
+<input type="file" id="imageInput">
+<button onclick="encodeImage()">تحويل إلى QR</button>
 
-  <h3>1) إرسال صورة</h3>
-  <input type="file" id="imageInput" accept="image/*">
-  <button onclick="encodeImage()">تحويل الصورة إلى باركودات مضغوطة</button>
+<div id="qrContainer"></div>
 
-  <div id="qrContainer"></div>
+<hr>
 
-  <hr>
+<h3>استقبال</h3>
+<input type="file" id="qrImageInput" multiple>
+<button onclick="decodeMultipleQR()">فك QR</button>
 
-  <h3>2) استقبال الصورة</h3>
-
-  <button onclick="toggleCamera()">مسح باركود بالكاميرا</button>
-  <video id="cameraView" autoplay playsinline></video>
-
-  <input type="file" id="qrImageInput" accept="image/*" multiple>
-  <button onclick="decodeMultipleQR()">فكّ عدة باركودات من المعرض</button>
-
-  <h4>الأجزاء المستلمة:</h4>
-  <div id="partsStatus"></div>
-
-  <h4>الصورة المستعادة:</h4>
-  <div id="outputImage" style="margin-top:20px; text-align:center;"></div>
-
-</div>
+<div id="outputImage"></div>
 
 <script>
 let receivedParts = {};
 let totalParts = 0;
-let cameraStream = null;
-let cameraRunning = false;
 
-/* تحميل صورة من ملف */
+/* =========================
+   1) معالجة الصورة (تصغير + ضغط)
+========================= */
+async function preprocessImage(file) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+
+      const maxSize = 400;
+      let w = img.width;
+      let h = img.height;
+
+      if (w > h && w > maxSize) {
+        h *= maxSize / w;
+        w = maxSize;
+      } else if (h > maxSize) {
+        w *= maxSize / h;
+        h = maxSize;
+      }
+
+      canvas.width = w;
+      canvas.height = h;
+
+      const ctx = canvas.getContext("2d");
+
+      // Grayscale
+      ctx.filter = "grayscale(100%)";
+      ctx.drawImage(img, 0, 0, w, h);
+
+      // ضغط (جرب webp لو تريد أفضل)
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
+
+      resolve(dataUrl);
+    };
+
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/* =========================
+   2) توليد QR
+========================= */
+async function encodeImage() {
+  const file = document.getElementById("imageInput").files[0];
+  if (!file) return alert("اختر صورة");
+
+  const processed = await preprocessImage(file);
+
+  const base64 = processed.split(",")[1];
+
+  // تحويل إلى binary
+  const binary = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+
+  // ضغط
+  const compressed = pako.deflate(binary);
+
+  // إلى Base64
+  const compressedBase64 = btoa(
+    String.fromCharCode(...compressed)
+  );
+
+  // تقسيم
+  const chunkSize = 800;
+  const chunks = [];
+
+  for (let i = 0; i < compressedBase64.length; i += chunkSize) {
+    chunks.push(compressedBase64.slice(i, i + chunkSize));
+  }
+
+  const container = document.getElementById("qrContainer");
+  container.innerHTML = "";
+
+  chunks.forEach((chunk, i) => {
+    const payload = `IMG:${i+1}/${chunks.length}|${chunk}`;
+
+    const div = document.createElement("div");
+    div.className = "qr";
+
+    new QRCode(div, {
+      text: payload,
+      width: 220,
+      height: 220
+    });
+
+    container.appendChild(div);
+  });
+
+  alert("عدد الباركودات: " + chunks.length);
+}
+
+/* =========================
+   3) قراءة QR
+========================= */
+async function decodeMultipleQR() {
+  const files = document.getElementById("qrImageInput").files;
+
+  for (const file of files) {
+    const img = await loadImage(file);
+    const payload = scanQR(img);
+
+    if (payload) handleQR(payload);
+  }
+}
+
 function loadImage(file) {
   return new Promise(resolve => {
     const img = new Image();
@@ -120,253 +159,70 @@ function loadImage(file) {
   });
 }
 
-/* ضغط الصورة إلى WebP */
-function compressToWebP(img, quality = 0.7) {
-  return new Promise(resolve => {
-    const canvas = document.createElement("canvas");
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(img, 0, 0);
-    canvas.toBlob(blob => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result.split(",")[1]);
-      reader.readAsDataURL(blob);
-    }, "image/webp", quality);
-  });
-}
-
-/* توليد QR في كانفس مستقل من payload نصي */
-function generateQR(payload) {
-  const size = 260;
-  const temp = document.createElement("div");
-  new QRCode(temp, {
-    text: payload,
-    width: size,
-    height: size,
-    correctLevel: QRCode.CorrectLevel.M
-  });
-  const canvas = temp.querySelector("canvas");
-  const outCanvas = document.createElement("canvas");
-  outCanvas.width = size;
-  outCanvas.height = size;
-  const ctx = outCanvas.getContext("2d");
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, size, size);
-  ctx.drawImage(canvas, 0, 0);
-  return outCanvas.toDataURL("image/png");
-}
-
-/* حفظ QR كصورة */
-function saveQR(payload) {
-  const url = generateQR(payload);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "qr.png";
-  a.click();
-}
-
-/* مشاركة QR */
-async function shareQR(payload) {
-  const url = generateQR(payload);
-  const res = await fetch(url);
-  const blob = await res.blob();
-  const file = new File([blob], "qr.png", { type: "image/png" });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    navigator.share({ files: [file], title: "QR" });
-  } else {
-    alert("المشاركة غير مدعومة على هذا الجهاز.");
-  }
-}
-
-/* توليد باركودات مضغوطة من الصورة */
-async function encodeImage() {
-  const file = document.getElementById("imageInput").files[0];
-  if (!file) {
-    alert("اختر صورة أولاً.");
-    return;
-  }
-
-  const img = await loadImage(file);
-
-  // 1) ضغط WebP
-  const webpBase64 = await compressToWebP(img, 0.7);
-
-  // 2) ضغط LZString
-  const compressed = LZString.compressToEncodedURIComponent(webpBase64);
-
-  // 3) تقسيم إلى أجزاء
-  const chunkSize = 800;
-  const chunks = [];
-  for (let i = 0; i < compressed.length; i += chunkSize) {
-    chunks.push(compressed.slice(i, i + chunkSize));
-  }
-
-  const qrContainer = document.getElementById("qrContainer");
-  qrContainer.innerHTML = "";
-
-  chunks.forEach((chunk, index) => {
-    const payload = `CMP:${index+1}/${chunks.length}|${chunk}`;
-
-    const div = document.createElement("div");
-    div.className = "qr-item";
-
-    const label = document.createElement("div");
-    label.textContent = `الجزء ${index+1} من ${chunks.length}`;
-
-    const qrDiv = document.createElement("div");
-    new QRCode(qrDiv, {
-      text: payload,
-      width: 260,
-      height: 260,
-      correctLevel: QRCode.CorrectLevel.M
-    });
-
-    const btns = document.createElement("div");
-    btns.className = "qr-buttons";
-
-    const saveBtn = document.createElement("button");
-    saveBtn.textContent = "حفظ";
-    saveBtn.onclick = () => saveQR(payload);
-
-    const shareBtn = document.createElement("button");
-    shareBtn.textContent = "مشاركة";
-    shareBtn.onclick = () => shareQR(payload);
-
-    btns.appendChild(saveBtn);
-    btns.appendChild(shareBtn);
-
-    div.appendChild(label);
-    div.appendChild(qrDiv);
-    div.appendChild(btns);
-
-    qrContainer.appendChild(div);
-  });
-
-  alert("تم توليد باركودات مضغوطة بنجاح.");
-}
-
-/* قراءة QR من صورة باستخدام jsQR */
-function scanQRFromImage(img) {
+function scanQR(img) {
   const canvas = document.createElement("canvas");
   canvas.width = img.width;
   canvas.height = img.height;
+
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, 0, 0);
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const code = jsQR(imageData.data, canvas.width, canvas.height);
+
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const code = jsQR(data.data, canvas.width, canvas.height);
+
   return code ? code.data : null;
 }
 
-/* معالجة جزء مضغوط مستلم */
-function handleCompressed(payload) {
-  if (!payload.startsWith("CMP:")) return;
-  const [header, body] = payload.split("|");
-  const [indexInfo] = header.replace("CMP:", "").split("/");
-  const index = parseInt(indexInfo);
-  const total = parseInt(header.split("/")[1]);
-  if (!totalParts) totalParts = total;
-  receivedParts[index] = body;
-  updatePartsStatus();
-}
+/* =========================
+   4) تجميع الأجزاء
+========================= */
+function handleQR(payload) {
+  if (!payload.startsWith("IMG:")) return;
 
-/* تحديث حالة الأجزاء */
-function updatePartsStatus() {
-  const count = Object.keys(receivedParts).length;
-  if (!totalParts) {
-    document.getElementById("partsStatus").textContent = "لم يتم استقبال أي جزء.";
-    return;
+  const [info, data] = payload.split("|");
+  const [index, total] = info.replace("IMG:", "").split("/");
+
+  receivedParts[parseInt(index)] = data;
+  totalParts = parseInt(total);
+
+  if (Object.keys(receivedParts).length === totalParts) {
+    rebuildImage();
   }
-  document.getElementById("partsStatus").textContent =
-    `تم استقبال ${count} من ${totalParts} جزءًا.`;
 }
 
-/* إعادة بناء الصورة من الأجزاء المضغوطة */
+/* =========================
+   5) فك الضغط واستعادة الصورة
+========================= */
 function rebuildImage() {
-  const keys = Object.keys(receivedParts).map(n => parseInt(n)).sort((a,b)=>a-b);
-  if (!keys.length) return;
+  let full = "";
 
-  let compressed = "";
-  keys.forEach(k => compressed += receivedParts[k]);
-
-  const base64 = LZString.decompressFromEncodedURIComponent(compressed);
-  if (!base64) {
-    alert("فشل فك الضغط، تأكد من اكتمال الأجزاء.");
-    return;
-  }
-
-  const img = new Image();
-  img.src = "data:image/webp;base64," + base64;
-
-  const out = document.getElementById("outputImage");
-  out.innerHTML = "";
-  out.appendChild(img);
-}
-
-/* فك عدة باركودات من المعرض */
-async function decodeMultipleQR() {
-  const files = document.getElementById("qrImageInput").files;
-  if (!files.length) {
-    alert("اختر صور باركود أولاً.");
-    return;
-  }
-
-  for (const file of files) {
-    const img = await loadImage(file);
-    const payload = scanQRFromImage(img);
-    if (payload) {
-      handleCompressed(payload);
-    }
-  }
-
-  rebuildImage();
-}
-
-/* تشغيل/إيقاف الكاميرا */
-async function toggleCamera() {
-  const video = document.getElementById("cameraView");
-
-  if (cameraRunning) {
-    cameraRunning = false;
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(t => t.stop());
-      cameraStream = null;
-    }
-    video.style.display = "none";
-    return;
+  for (let i = 1; i <= totalParts; i++) {
+    full += receivedParts[i];
   }
 
   try {
-    cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-    video.srcObject = cameraStream;
-    video.style.display = "block";
-    cameraRunning = true;
-    scanCameraLoop();
+    const compressed = Uint8Array.from(atob(full), c => c.charCodeAt(0));
+
+    const decompressed = pako.inflate(compressed);
+
+    let binary = "";
+    decompressed.forEach(b => binary += String.fromCharCode(b));
+
+    const finalBase64 = btoa(binary);
+
+    const img = new Image();
+    img.src = "data:image/jpeg;base64," + finalBase64;
+
+    const out = document.getElementById("outputImage");
+    out.innerHTML = "";
+    out.appendChild(img);
+
   } catch (e) {
-    alert("تعذر تشغيل الكاميرا: " + e);
-  }
-}
-
-/* حلقة مسح الكاميرا */
-function scanCameraLoop() {
-  if (!cameraRunning) return;
-
-  const video = document.getElementById("cameraView");
-  if (video.readyState === video.HAVE_ENOUGH_DATA) {
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(imageData.data, canvas.width, canvas.height);
-    if (code && code.data) {
-      handleCompressed(code.data);
-      rebuildImage();
-    }
+    alert("فشل فك الضغط");
   }
 
-  requestAnimationFrame(scanCameraLoop);
+  receivedParts = {};
+  totalParts = 0;
 }
 </script>
 
